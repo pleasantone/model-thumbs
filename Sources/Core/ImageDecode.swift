@@ -72,6 +72,70 @@ public enum ImageDecode {
         return Image(width: width, height: height, pixels: px)
     }
 
+    // MARK: QOI
+
+    /// Decodes a QOI image (https://qoiformat.org). Returns nil for anything malformed or truncated.
+    public static func qoi(_ data: Data) -> Image? {
+        let bytes = [UInt8](data)
+        guard bytes.count > 14, bytes[0] == 0x71, bytes[1] == 0x6F, bytes[2] == 0x69, bytes[3] == 0x66 else { return nil }
+        func be32(_ p: Int) -> Int {
+            Int(bytes[p]) << 24 | Int(bytes[p + 1]) << 16 | Int(bytes[p + 2]) << 8 | Int(bytes[p + 3])
+        }
+        let width = be32(4), height = be32(8)
+        // A run opcode covers at most 62 pixels per byte, which bounds what a real file can claim.
+        guard width > 0, height > 0, width <= 8192, height <= 8192,
+              width * height <= (bytes.count - 14) * 62 else { return nil }
+        let total = width * height
+        var out = [UInt8](repeating: 0, count: total * 4)
+        var seen = [UInt8](repeating: 0, count: 64 * 4)
+        var r: UInt8 = 0, g: UInt8 = 0, b: UInt8 = 0, a: UInt8 = 255
+        var p = 14, pixel = 0, run = 0
+        while pixel < total {
+            if run > 0 {
+                run -= 1
+            } else {
+                guard p < bytes.count else { return nil }
+                let op = bytes[p]; p += 1
+                if op == 0xFE {
+                    guard p + 3 <= bytes.count else { return nil }
+                    r = bytes[p]; g = bytes[p + 1]; b = bytes[p + 2]; p += 3
+                } else if op == 0xFF {
+                    guard p + 4 <= bytes.count else { return nil }
+                    r = bytes[p]; g = bytes[p + 1]; b = bytes[p + 2]; a = bytes[p + 3]; p += 4
+                } else {
+                    switch op >> 6 {
+                    case 0:
+                        let i = Int(op) * 4
+                        r = seen[i]; g = seen[i + 1]; b = seen[i + 2]; a = seen[i + 3]
+                    case 1:
+                        r = r &+ ((op >> 4) & 3) &- 2
+                        g = g &+ ((op >> 2) & 3) &- 2
+                        b = b &+ (op & 3) &- 2
+                    case 2:
+                        guard p < bytes.count else { return nil }
+                        let dg = (op & 0x3F) &- 32
+                        let next = bytes[p]; p += 1
+                        r = r &+ dg &+ (next >> 4) &- 8
+                        g = g &+ dg
+                        b = b &+ dg &+ (next & 0x0F) &- 8
+                    default:
+                        run = Int(op & 0x3F)
+                    }
+                }
+                let h = (Int(r) * 3 + Int(g) * 5 + Int(b) * 7 + Int(a) * 11) % 64 * 4
+                seen[h] = r; seen[h + 1] = g; seen[h + 2] = b; seen[h + 3] = a
+            }
+            // Image pixels are premultiplied; QOI stores straight alpha.
+            let o = pixel * 4
+            out[o] = UInt8(Int(r) * Int(a) / 255)
+            out[o + 1] = UInt8(Int(g) * Int(a) / 255)
+            out[o + 2] = UInt8(Int(b) * Int(a) / 255)
+            out[o + 3] = a
+            pixel += 1
+        }
+        return Image(width: width, height: height, pixels: out)
+    }
+
     // MARK: Windows DIB
 
     /// Decodes a BITMAPINFOHEADER-based bitmap (24/32-bit, or 8-bit with palette).

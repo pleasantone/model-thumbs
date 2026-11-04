@@ -5,10 +5,6 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![macOS 13+](https://img.shields.io/badge/macOS-13%2B-lightgrey)
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/enzoballardin/model-thumbs/main/install.sh | bash
-```
-
 macOS shows a preview icon for `.stl` files, but most other model formats get a generic
 document icon. ModelThumbs is a Quick Look thumbnail extension that adds real previews for
 **70+ file extensions**: 3MF projects, STEP parts, OBJ meshes, point cloud scans, resin
@@ -49,66 +45,49 @@ the background and there's nothing to re-run when you add files.
 | Requirement | Notes |
 |---|---|
 | macOS 13 Ventura or later | Apple Silicon (M1–M4) or Intel |
-| Apple Command Line Tools | Free. The build script offers to install them |
+| Apple Command Line Tools | Free. Install with `xcode-select --install` |
 | [Homebrew](https://brew.sh) *(optional)* | Only needed for STEP / IGES / BREP thumbnails |
 
 ---
 
 ## Installation
 
-### Quick install (one command)
-
-Open **Terminal** and paste:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/enzoballardin/model-thumbs/main/install.sh | bash
-```
-
-That's it. The installer:
-
-1. **Checks for Apple's Command Line Tools.** If they're missing, a macOS dialog opens.
-   Click **Install**, wait for it to finish, then paste the command again.
-2. **Downloads the source** to `~/.modelthumbs` (or updates it if it's already there).
-3. **Adds STEP / IGES support** by installing [OpenCASCADE](https://dev.opencascade.org),
-   an open-source CAD kernel, through Homebrew (a few minutes the first time). If Homebrew
-   isn't installed, STEP is skipped; install [Homebrew](https://brew.sh) and run the command
-   again to add it.
-4. **Looks up file type identifiers** that apps you already have (slicers, CAD tools) have
-   registered, so ModelThumbs covers those too.
-5. **Compiles** the extension, a small host app and a command-line renderer.
-6. **Signs** them for your Mac only (see [About signing](#about-signing)).
-7. **Installs** `ModelThumbs.app` into `/Applications` (or `~/Applications` if
-   `/Applications` isn't writable) and registers the extension.
-8. **Tests** thumbnails for the files in `Samples/` and prints `ok` or `FAIL` for each.
-
-At the end a small ModelThumbs window opens. You can close it; the app doesn't need to run.
-
-To install without STEP support:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/enzoballardin/model-thumbs/main/install.sh | bash -s -- --no-cad
-```
-
-### Manual install
-
-If you'd rather look at the code first:
+There is no one-line installer on purpose: piping a download into a shell runs whatever the
+server sends, before anyone has read it. Each step here is separate, and `make -n <target>`
+prints exactly what a step will do without running it.
 
 ```bash
 git clone https://github.com/enzoballardin/model-thumbs.git
 cd model-thumbs
-bash build.sh
+git log -3                 # see what you're about to build
+make -n build              # preview the build commands
+make build                 # compile and sign into ./build
+make verify                # check the bundle, test it in a sandbox
+make install               # verify again, copy to ~/Applications, register the extension
 ```
 
-Run this way, `build.sh` asks before installing OpenCASCADE.
+For STEP / IGES / BREP thumbnails, install [OpenCASCADE](https://dev.opencascade.org) yourself
+first. The build never installs anything for you:
 
-### Build options
+```bash
+brew install opencascade
+make build CAD=1
+```
+
+### What each step does
 
 | Command | What it does |
 |---|---|
-| `bash build.sh` | Build and install, asking before installing OpenCASCADE |
-| `bash build.sh --yes` | Don't ask; install OpenCASCADE with Homebrew if it's missing |
-| `bash build.sh --no-cad` | Skip STEP / IGES / BREP support |
-| `bash build.sh --no-install` | Only build `build/ModelThumbs.app`, don't install it |
+| `make build` | Compiles into `build/`. Uses no network and touches nothing outside `build/` |
+| `make build CAD=1` | Also adds STEP / IGES / BREP, and copies the OpenCASCADE libraries into the app |
+| `make verify` | Checks signatures, sandbox entitlements, linked libraries and imports, then renders `Samples/` and the malformed files in `Tests/` under `sandbox-exec` with no network |
+| `make test-asan` | Runs the malformed files under AddressSanitizer |
+| `make install` | Runs `verify`, then installs. Use `PREFIX=/Applications` to change the location |
+| `make check-quicklook` | Asks Quick Look for real thumbnails of the samples, the way Finder does |
+| `make uninstall` | Removes the installed app and unregisters the extension |
+
+`make build` also looks up file type identifiers that apps you already have (slicers, CAD
+tools) have registered on this Mac, so ModelThumbs covers those too.
 
 ### Check it's enabled
 
@@ -118,12 +97,19 @@ It's enabled automatically in most cases.
 
 Then open a folder with your models in Finder. Icon view and gallery view show thumbnails best.
 
+Press space on a file for a large preview. It shows the largest image stored in the file when it has
+one, and renders the model when it doesn't. A 3MF whose only image is small is rendered too,
+because that's sharper.
+
+Renders of Bambu Studio and OrcaSlicer projects use the saved filament colors and show plate 1.
+Hand-painted faces show the base filament color.
+
 ### About signing
 
 macOS requires Quick Look extensions to be code-signed. Because you build ModelThumbs
 yourself, it's signed for local use only. There's no Apple review, nothing to pay for, and
-Gatekeeper doesn't block it since the app wasn't downloaded. If your keychain already has an
-*Apple Development* or *Developer ID* certificate, the script uses it automatically.
+Gatekeeper doesn't block it since the app wasn't downloaded. The build signs ad hoc unless you
+choose a certificate yourself: `make build SIGN="<identity>"`.
 
 ---
 
@@ -270,7 +256,7 @@ Common messages:
 | Message | Meaning |
 |---|---|
 | `no preview image` / `no embedded preview found` | The app that saved the file didn't store a preview |
-| `CAD support not built in` | Rebuild without `--no-cad` to add STEP / IGES |
+| `CAD support not built in` | Rebuild with `make build CAD=1` to add STEP / IGES |
 | `zstd-compressed .blend` | See [Known limitations](#known-limitations) |
 | `compressed LAZ data` | `.laz` isn't supported |
 
@@ -281,38 +267,36 @@ log show --last 5m --predicate 'process == "pkd" OR eventMessage CONTAINS "Model
 ```
 
 **A format stopped working after installing a slicer or CAD app.** That app may have
-registered its own type identifier for the extension. Run `bash build.sh` again; it detects
-identifiers already on your Mac and adds them.
+registered its own type identifier for the extension. Run `make build` and `make install` again; the build
+detects identifiers already on your Mac and adds them.
 
 ---
 
 ## Updating
 
-Run the install command again. It pulls the latest version, rebuilds, and replaces the
-installed copy:
-
 ```bash
-curl -fsSL https://raw.githubusercontent.com/enzoballardin/model-thumbs/main/install.sh | bash
+git fetch origin
+git log HEAD..origin/main  # read what changed
+git merge origin/main
+make build                 # add CAD=1 if you use STEP / IGES
+make install
 ```
-
-If you installed manually, run `git pull` and `bash build.sh` in your clone instead.
 
 ---
 
 ## Uninstalling
 
+From your clone:
+
 ```bash
-bash ~/.modelthumbs/uninstall.sh
+make uninstall
 ```
 
-(or `bash uninstall.sh` from your clone).
-
 This removes `ModelThumbs.app`, unregisters the extension, and clears the thumbnail cache.
-To remove everything else as well:
+If you installed OpenCASCADE only for ModelThumbs, you can remove it as well:
 
 ```bash
-rm -rf ~/.modelthumbs              # downloaded source
-brew uninstall opencascade         # only if you installed it just for ModelThumbs
+brew uninstall opencascade
 ```
 
 ---
@@ -390,9 +374,7 @@ Finder ──► Quick Look ──► ModelThumbs extension (sandboxed)
 
 ```
 model-thumbs/
-├── install.sh               One-command installer (download + build.sh --yes)
-├── build.sh                 Build, sign, install and register
-├── uninstall.sh             Remove the app and extension
+├── Makefile                 Build, verify, install and uninstall (preview with make -n)
 ├── Sources/
 │   ├── Core/                Format parsers and the renderer (portable Swift)
 │   │   ├── Renderer.swift         CPU rasterizer
@@ -403,14 +385,20 @@ model-thumbs/
 │   │   └── …
 │   ├── CAD/                 OpenCASCADE bridge (C++) for STEP / IGES / BREP
 │   ├── Extension/           Quick Look thumbnail provider
+│   ├── Preview/             Quick Look preview provider (what space shows)
 │   ├── App/                 Host app (status window, refresh button)
 │   └── CLI/                 modelthumbs-render command-line tool
 ├── Tools/
 │   ├── uticheck.swift       Finds file type identifiers already registered on this Mac
+│   ├── file_types.py        File type table and Info.plist generator
+│   ├── verify.py            Bundle checks and sandboxed render tests
+│   ├── qlcheck.swift        Requests thumbnails through Quick Look with a time limit
 │   └── bundle_dylibs.py     Copies OpenCASCADE libraries into the app bundle
+├── Tests/
+│   └── make_malformed.py    Malformed model files for verify.py
 ├── Resources/
 │   └── Extension.entitlements
-└── Samples/                 Small test files used by build.sh
+└── Samples/                 Small test files used by make verify
 ```
 
 ---

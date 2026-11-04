@@ -46,7 +46,7 @@ public enum LoaderPLY {
                     }
                 }
             case "element":
-                if parts.count >= 3 { elements.append(Element(name: parts[1], count: Int(parts[2]) ?? 0)) }
+                if parts.count >= 3 { elements.append(Element(name: parts[1], count: max(0, Int(parts[2]) ?? 0))) }
             case "property":
                 guard !elements.isEmpty else { continue }
                 if parts.count >= 5 && parts[1] == "list" {
@@ -101,6 +101,10 @@ public enum LoaderPLY {
             pos += 1
             return 0
         }
+        @inline(__always) func int() -> Int {
+            let v = num()
+            return v.isFinite && abs(v) < 1e15 ? Int(v) : 0
+        }
         for el in elements {
             let isVertex = el.name == "vertex"
             let isFace = el.name == "face"
@@ -108,13 +112,18 @@ public enum LoaderPLY {
             let yi = el.properties.firstIndex { $0.name == "y" }
             let zi = el.properties.firstIndex { $0.name == "z" }
             for _ in 0..<el.count {
+                // The header can declare more records than the body holds.
+                if pos >= b.count { return }
                 var x = 0.0, y = 0.0, z = 0.0
                 for (pi, prop) in el.properties.enumerated() {
                     if prop.listCountType != nil {
-                        let cnt = Int(num())
+                        let cnt = int()
                         var ids: [Int] = []
-                        ids.reserveCapacity(cnt)
-                        for _ in 0..<max(0, cnt) { ids.append(Int(num())) }
+                        ids.reserveCapacity(min(max(0, cnt), max(0, b.count - pos)))
+                        for _ in 0..<max(0, cnt) {
+                            if pos >= b.count { break }
+                            ids.append(int())
+                        }
                         if isFace && (prop.name == "vertex_indices" || prop.name == "vertex_index") {
                             addPolygon(ids, &mesh)
                         }

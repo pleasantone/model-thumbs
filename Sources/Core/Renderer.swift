@@ -13,6 +13,8 @@ public struct RenderOptions {
     public var elevation: Float = 28
     public var padding: Float = 0.06
     public var outline: Bool = true
+    /// Use the colours stored in the mesh when it has them, instead of `color`.
+    public var useMeshColors: Bool = true
     public init() {}
 }
 
@@ -86,6 +88,12 @@ public enum Renderer {
         let pixelCount = N * N
         var depth = [Float](repeating: -Float.greatestFiniteMagnitude, count: pixelCount)
         var shade = [Float](repeating: 0, count: pixelCount)  // brightness 0...~1.3
+        // Palette index per pixel, only when every triangle has a valid colour.
+        let triangleColors = mesh.triangleColors
+        let palette = mesh.palette
+        let usesColors = o.useMeshColors && !mesh.indices.isEmpty && triangleColors.count == mesh.triangleCount
+            && (triangleColors.max().map { Int($0) < palette.count } ?? false)
+        var pixelColor = [UInt8](repeating: 0, count: usesColors ? pixelCount : 0)
 
         // Lights (in world space, derived from camera so lighting is view-relative)
         func norm(_ v: (Float, Float, Float)) -> (Float, Float, Float) {
@@ -122,6 +130,7 @@ public enum Renderer {
                 let tc = ip.count
                 while t + 2 < tc {
                     let ia = Int(ip[t]), ib = Int(ip[t + 1]), ic = Int(ip[t + 2])
+                    let triangleColor: UInt8 = usesColors ? triangleColors[t / 3] : 0
                     t += 3
                     // Face normal in world space
                     let ax = p[ia * 3], ay = p[ia * 3 + 1], azz = p[ia * 3 + 2]
@@ -161,7 +170,10 @@ public enum Renderer {
                         if cx >= 0 && cy >= 0 && cx < N && cy < N {
                             let k = cy * N + cx
                             let z = (z0 + z1 + z2) / 3
-                            if z > db[k] { db[k] = z; sb[k] = brightness }
+                            if z > db[k] {
+                                db[k] = z; sb[k] = brightness
+                                if usesColors { pixelColor[k] = triangleColor }
+                            }
                         }
                         continue
                     }
@@ -176,7 +188,10 @@ public enum Renderer {
                             if w0 < 0 || w1 < 0 || w2 < 0 { continue }
                             let z = w0 * z0 + w1 * z1 + w2 * z2
                             let k = row + px
-                            if z > db[k] { db[k] = z; sb[k] = brightness }
+                            if z > db[k] {
+                                db[k] = z; sb[k] = brightness
+                                if usesColors { pixelColor[k] = triangleColor }
+                            }
                         }
                     }
                 }
@@ -226,9 +241,10 @@ public enum Renderer {
                         // subtle depth cue: farther = slightly darker
                         let dz = (depth[k] - minZ) / zspan
                         s *= 0.86 + 0.14 * dz
-                        var r = min(1, cr * s + 0.04 * max(0, s - 1))
-                        var g = min(1, cg * s + 0.04 * max(0, s - 1))
-                        var b = min(1, cb * s + 0.04 * max(0, s - 1))
+                        let base = usesColors ? palette[Int(pixelColor[k])] : (cr, cg, cb)
+                        var r = min(1, base.0 * s + 0.04 * max(0, s - 1))
+                        var g = min(1, base.1 * s + 0.04 * max(0, s - 1))
+                        var b = min(1, base.2 * s + 0.04 * max(0, s - 1))
                         let e = edge[k]
                         if e > 0 {
                             let f = 1 - 0.55 * e

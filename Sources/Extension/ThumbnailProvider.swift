@@ -42,7 +42,11 @@ final class ThumbnailProvider: QLThumbnailProvider {
                 ro.size = pixels
                 ro.supersample = pixels <= 256 ? 3 : 2
                 if mesh.triangleCount > 3_000_000 { ro.supersample = min(ro.supersample, 2) }
-                if let hex = defaults.string(forKey: "ModelColor"), let c = Self.parseHex(hex) { ro.color = c }
+                // A colour the user chose wins over the colours saved in the file.
+                if let hex = defaults.string(forKey: "ModelColor"), let c = Self.parseHex(hex) {
+                    ro.color = c
+                    ro.useMeshColors = false
+                }
                 let img = Renderer.render(mesh, options: ro)
                 guard let cg = Self.cgImage(img) else { throw ModelError.malformed("render") }
                 handler(Self.reply(for: cg, maxSize: maxSize), nil)
@@ -60,7 +64,9 @@ final class ThumbnailProvider: QLThumbnailProvider {
         let size = CGSize(width: max(1, (iw * s).rounded()), height: max(1, (ih * s).rounded()))
         return QLThumbnailReply(contextSize: size) { ctx -> Bool in
             ctx.interpolationQuality = .high
-            ctx.draw(image, in: CGRect(origin: .zero, size: size))
+            // On a Retina display the context is larger than `size` and isn't scaled to match,
+            // so fill whatever area the context really covers.
+            ctx.draw(image, in: ctx.boundingBoxOfClipPath)
             return true
         }
     }

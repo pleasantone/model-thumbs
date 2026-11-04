@@ -37,7 +37,15 @@ public enum LoaderGLTF {
                     buffers.append(Data(base64Encoded: String(uri[uri.index(after: comma)...])))
                 } else if let base = url?.deletingLastPathComponent() {
                     let path = uri.removingPercentEncoding ?? uri
-                    buffers.append(try? Data(contentsOf: base.appendingPathComponent(path), options: .alwaysMapped))
+                    // A model may only reference files in its own folder or below it.
+                    let root = base.standardizedFileURL.resolvingSymlinksInPath()
+                    let target = root.appendingPathComponent(path).standardizedFileURL.resolvingSymlinksInPath()
+                    let prefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
+                    if target.path.hasPrefix(prefix) {
+                        buffers.append(try? Data(contentsOf: target, options: .alwaysMapped))
+                    } else {
+                        buffers.append(nil)
+                    }
                 } else {
                     buffers.append(nil)
                 }
@@ -54,18 +62,22 @@ public enum LoaderGLTF {
         func accessorData(_ index: Int) -> (data: Data, offset: Int, stride: Int, count: Int, comp: Int, type: String)? {
             guard index >= 0, index < accessors.count else { return nil }
             let a = accessors[index]
-            guard let viewIdx = a["bufferView"] as? Int, viewIdx < views.count else { return nil }
+            guard let viewIdx = a["bufferView"] as? Int, viewIdx >= 0, viewIdx < views.count else { return nil }
             if a["sparse"] != nil { /* sparse accessors ignored; base data still used */ }
             let v = views[viewIdx]
-            guard let bufIdx = v["buffer"] as? Int, bufIdx < buffers.count, let buf = buffers[bufIdx] else { return nil }
+            guard let bufIdx = v["buffer"] as? Int, bufIdx >= 0, bufIdx < buffers.count, let buf = buffers[bufIdx] else { return nil }
             let comp = a["componentType"] as? Int ?? 5126
             let type = a["type"] as? String ?? "SCALAR"
             let count = a["count"] as? Int ?? 0
-            let offset = (v["byteOffset"] as? Int ?? 0) + (a["byteOffset"] as? Int ?? 0)
-            let ncomp = ["SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4, "MAT4": 16][type] ?? 1
-            let csize = [5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4][comp] ?? 4
+            let viewOffset = v["byteOffset"] as? Int ?? 0, accessorOffset = a["byteOffset"] as? Int ?? 0
+            guard viewOffset >= 0, accessorOffset >= 0,
+                  let ncomp = ["SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4, "MAT4": 16][type],
+                  let csize = [5120: 1, 5121: 1, 5122: 2, 5123: 2, 5125: 4, 5126: 4][comp] else { return nil }
+            let offset = viewOffset + accessorOffset
             let stride = (v["byteStride"] as? Int) ?? (ncomp * csize)
-            guard count > 0, offset + stride * (count - 1) + ncomp * csize <= buf.count else { return nil }
+            // The reads below are unchecked, so the whole range has to be proven valid here.
+            guard count > 0, stride >= ncomp * csize,
+                  offset + stride * (count - 1) + ncomp * csize <= buf.count else { return nil }
             return (buf, offset, stride, count, comp, type)
         }
 
@@ -74,7 +86,7 @@ public enum LoaderGLTF {
             guard mode == 4 || mode == 5 || mode == 6 || mode == 0 else { return nil }
             if let ext = prim["extensions"] as? [String: Any], ext["KHR_draco_mesh_compression"] != nil { return nil }
             guard let attrs = prim["attributes"] as? [String: Any], let posIdx = attrs["POSITION"] as? Int,
-                  let pa = accessorData(posIdx), pa.comp == 5126 else { return nil }
+                  let pa = accessorData(posIdx), pa.comp == 5126, pa.type == "VEC3" else { return nil }
             var m = Mesh()
             m.positions.reserveCapacity(pa.count * 3)
             pa.data.withUnsafeBytes { raw in
@@ -88,6 +100,7 @@ public enum LoaderGLTF {
             if mode == 0 { return m } // points
             var idx: [UInt32] = []
             if let ii = prim["indices"] as? Int, let ia = accessorData(ii) {
+                guard ia.type == "SCALAR", [5121, 5123, 5125].contains(ia.comp) else { return nil }
                 idx.reserveCapacity(ia.count)
                 ia.data.withUnsafeBytes { raw in
                     for i in 0..<ia.count {

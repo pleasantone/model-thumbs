@@ -137,7 +137,8 @@ public struct ZipArchive {
 
     /// Inflates raw DEFLATE data, stopping after `maxOutput` bytes. Truncated or
     /// trailing-garbage input is tolerated; whatever was decoded is returned.
-    public static func inflatePrefix(_ input: Data, maxOutput: Int) -> Data {
+    public static func inflatePrefix(_ input: Data, maxOutput requested: Int) -> Data {
+        let maxOutput = min(requested, maxInflatedSize)
         if input.isEmpty || maxOutput <= 0 { return Data() }
         #if canImport(Compression)
         var out = Data(count: maxOutput)
@@ -171,9 +172,16 @@ public struct ZipArchive {
         #endif
     }
 
-    /// Inflates raw DEFLATE data.
+    /// Upper limit for one decompressed entry, so a crafted archive can't exhaust memory.
+    static let maxInflatedSize = 1 << 30
+
+    /// Inflates raw DEFLATE data. `expectedSize` comes from the file, so it isn't trusted:
+    /// DEFLATE can't expand by more than about 1032:1, and larger claims are rejected.
     static func inflate(_ input: Data, expectedSize: Int) throws -> Data {
         if input.isEmpty { return Data() }
+        guard expectedSize >= 0, expectedSize <= min(maxInflatedSize, input.count * 1032 + 1024) else {
+            throw ModelError.malformed("zip: declared size is not plausible")
+        }
         #if canImport(Compression)
         // COMPRESSION_ZLIB in Apple's Compression framework is raw DEFLATE.
         let capacity = max(expectedSize, 64)

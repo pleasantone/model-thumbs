@@ -6,6 +6,10 @@ public struct Mesh {
     public var positions: [Float] = []
     /// vertex indices, three per triangle. Empty for point clouds.
     public var indices: [UInt32] = []
+    /// Optional colours, each 0...1. Empty means the renderer's default colour.
+    public var palette: [(Float, Float, Float)] = []
+    /// Index into `palette` for each triangle. Empty, or one entry per triangle.
+    public var triangleColors: [UInt8] = []
 
     public init() {}
 
@@ -57,13 +61,19 @@ public struct Mesh {
         if !bad { return }
         var clean: [UInt32] = []
         clean.reserveCapacity(indices.count)
+        let hasColors = triangleColors.count == indices.count / 3
+        var cleanColors: [UInt8] = []
         var t = 0
         while t + 2 < indices.count {
             let a = indices[t], b = indices[t + 1], c = indices[t + 2]
-            if a < n && b < n && c < n { clean.append(a); clean.append(b); clean.append(c) }
+            if a < n && b < n && c < n {
+                clean.append(a); clean.append(b); clean.append(c)
+                if hasColors { cleanColors.append(triangleColors[t / 3]) }
+            }
             t += 3
         }
         indices = clean
+        triangleColors = cleanColors
     }
 }
 

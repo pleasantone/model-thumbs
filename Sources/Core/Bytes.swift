@@ -29,11 +29,13 @@ public final class TextBuffer {
 
     deinit { storage.deallocate() }
 
-    @inline(__always) public subscript(i: Int) -> UInt8 { storage[i] }
+    /// Reads outside the buffer return 0 (the same as the terminator).
+    @inline(__always) public subscript(i: Int) -> UInt8 { i >= 0 && i < count ? storage[i] : 0 }
 
     /// Parses a floating point number at `pos`. Returns nil if nothing parsed.
     @inline(__always)
     public func parseDouble(at pos: Int, end: inout Int) -> Double? {
+        guard pos >= 0, pos < count else { end = pos; return nil }
         let start = UnsafeMutableRawPointer(storage + pos).assumingMemoryBound(to: CChar.self)
         var endPtr: UnsafeMutablePointer<CChar>? = nil
         let v = strtod(start, &endPtr)
@@ -44,6 +46,7 @@ public final class TextBuffer {
 
     @inline(__always)
     public func parseInt(at pos: Int, end: inout Int) -> Int? {
+        guard pos >= 0, pos < count else { end = pos; return nil }
         let start = UnsafeMutableRawPointer(storage + pos).assumingMemoryBound(to: CChar.self)
         var endPtr: UnsafeMutablePointer<CChar>? = nil
         let v = strtol(start, &endPtr, 10)
@@ -77,8 +80,9 @@ public final class TextBuffer {
     }
 
     public func string(_ start: Int, _ end: Int) -> String {
-        guard end > start else { return "" }
-        return String(decoding: UnsafeBufferPointer(start: storage + start, count: end - start), as: UTF8.self)
+        let s = max(0, start), e = min(end, count)
+        guard e > s else { return "" }
+        return String(decoding: UnsafeBufferPointer(start: storage + s, count: e - s), as: UTF8.self)
     }
 }
 

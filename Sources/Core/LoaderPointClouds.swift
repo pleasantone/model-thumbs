@@ -39,6 +39,16 @@ public enum LoaderPointClouds {
         if sizes.count != fields.count { sizes = Array(repeating: 4, count: fields.count) }
         if types.count != fields.count { types = Array(repeating: "F", count: fields.count) }
         if points == 0 { points = width * height }
+        // value() reads with unchecked loads, so every field layout has to be valid before it runs.
+        guard points > 0 else { throw ModelError.malformed("pcd point count") }
+        for f in 0..<fields.count {
+            let type = types[f].uppercased()
+            guard counts[f] >= 1, counts[f] <= 1 << 20,
+                  type == "F" ? (sizes[f] == 4 || sizes[f] == 8)
+                              : ((type == "I" || type == "U") && [1, 2, 4, 8].contains(sizes[f])) else {
+                throw ModelError.malformed("pcd field layout")
+            }
+        }
         guard let xi = fields.firstIndex(of: "x"), let yi = fields.firstIndex(of: "y"), let zi = fields.firstIndex(of: "z") else {
             throw ModelError.unsupported("pcd without x/y/z")
         }
@@ -98,13 +108,18 @@ public enum LoaderPointClouds {
         case "binary_compressed":
             let r = BinaryReader(data)
             guard let csize = r.peekU32(at: bodyStart), let usize = r.peekU32(at: bodyStart + 4),
-                  bodyStart + 8 + Int(csize) <= data.count else { throw ModelError.malformed("pcd compressed header") }
+                  bodyStart + 8 + Int(csize) <= data.count,
+                  Int(usize) <= Int(csize) * 264 else { throw ModelError.malformed("pcd compressed header") }
             let s = data.startIndex + bodyStart + 8
             let raw = lzfDecompress(data[s..<(s + Int(csize))], outputSize: Int(usize))
             guard raw.count == Int(usize) else { throw ModelError.malformed("pcd lzf") }
             // Structure-of-arrays: each field's values for all points are contiguous.
             var base = [Int](repeating: 0, count: fields.count)
             for f in 1..<max(1, fields.count) { base[f] = base[f - 1] + sizes[f - 1] * counts[f - 1] * points }
+            let last = fields.count - 1
+            guard base[last] + sizes[last] * counts[last] * points <= raw.count else {
+                throw ModelError.malformed("pcd compressed body is too short")
+            }
             raw.withUnsafeBytes { buf in
                 var i = 0
                 while i < points {

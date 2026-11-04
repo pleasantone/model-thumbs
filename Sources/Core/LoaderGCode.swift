@@ -2,8 +2,14 @@ import Foundation
 
 /// Extracts the preview image slicers embed in G-code.
 /// Text G-code: "; thumbnail begin WxH len" base64 blocks (PrusaSlicer, Orca, Bambu, Cura plugins).
-/// Binary G-code (.bgcode): thumbnail blocks (type 5) holding PNG or JPEG.
+/// Binary G-code (.bgcode): thumbnail blocks (type 5) holding PNG, JPEG or QOI.
 public enum LoaderGCode {
+    /// PNG or JPEG bytes for an embedded image. QOI is converted, since ImageIO can't read it.
+    static func usableImage(_ data: Data) -> Data? {
+        if data.isPNG || data.isJPEG { return data }
+        return ImageDecode.qoi(data).map { ImageDecode.png($0) }
+    }
+
     public static func thumbnail(_ data: Data) throws -> Data {
         if data.starts(with: Array("GCDE".utf8)) { return try binaryThumbnail(data) }
         return try textThumbnail(data)
@@ -18,12 +24,11 @@ public enum LoaderGCode {
             let text = String(decoding: chunk, as: UTF8.self)
             var searchStart = text.startIndex
             while let begin = text.range(of: "thumbnail", range: searchStart..<text.endIndex) {
-                // Accept "; thumbnail begin", "; thumbnail_JPG begin", "; thumbnail_QOI begin"(skipped later)
+                // Accept "; thumbnail begin", "; thumbnail_JPG begin", "; thumbnail_QOI begin"
                 guard let lineEnd = text[begin.upperBound...].firstIndex(of: "\n") else { break }
                 let line = text[begin.lowerBound..<lineEnd]
                 searchStart = lineEnd
                 guard line.contains(" begin") else { continue }
-                if line.contains("QOI") { continue }
                 // dimensions "WxH"
                 var area = 0
                 for tok in line.split(separator: " ") where tok.contains("x") {
@@ -39,8 +44,9 @@ public enum LoaderGCode {
                     b64 += s
                 }
                 searchStart = endLineEnd
-                if let img = Data(base64Encoded: b64, options: .ignoreUnknownCharacters), img.isPNG || img.isJPEG {
-                    if area >= bestArea { best = img; bestArea = area }
+                if area >= bestArea, let raw = Data(base64Encoded: b64, options: .ignoreUnknownCharacters),
+                   let img = usableImage(raw) {
+                    best = img; bestArea = area
                 }
             }
         }
@@ -65,9 +71,10 @@ public enum LoaderGCode {
             let blockStart = r.offset
             if type == 5 {
                 guard let format = r.u16(), let w = r.u16(), let h = r.u16() else { break }
-                if let img = r.bytes(csize), compression == 0, format != 2, img.isPNG || img.isJPEG {
-                    let area = Int(w) * Int(h)
-                    if area >= bestArea { best = img; bestArea = area }
+                _ = format // the image's own header says what it is
+                let area = Int(w) * Int(h)
+                if let raw = r.bytes(csize), compression == 0, area >= bestArea, let img = usableImage(raw) {
+                    best = img; bestArea = area
                 }
             } else if type == 1 && best != nil {
                 break // G-code data blocks begin: thumbnails are done
